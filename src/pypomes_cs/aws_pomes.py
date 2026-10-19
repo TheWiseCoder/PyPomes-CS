@@ -1,0 +1,1103 @@
+import boto3
+from botocore.client import BaseClient, Paginator
+from botocore.paginate import PageIterator
+from io import BytesIO
+from pathlib import Path
+from pypomes_core import Mimetype
+from typing import Any, BinaryIO
+
+from .cs_common import (
+    _CS_LOGGERS, CsParam,
+    _get_param, _get_params, _normalize_tags, _except_msg
+)
+
+
+def get_client(engine_id: str,
+               errors: list[str] = None) -> BaseClient | None:
+    """
+    Obtain and return a *AWS* client object.
+
+    :param engine_id: the reference AWS engine
+    :param errors: incidental error messages (might be a non-empty list)
+    :return: the AWS client object, or *None* if error
+    """
+    # initialize the return variable
+    result: BaseClient | None = None
+
+    # retrieve the access parameters
+    aws_params: dict[CsParam, Any] = _get_params(engine_id=engine_id)
+
+    # obtain the AWS client
+    try:
+        result = boto3.client(service_name="s3",
+                              region_name=aws_params.get(CsParam.REGION_NAME),
+                              use_ssl=aws_params.get(CsParam.SECURE_ACCESS),
+                              verify=False,
+                              endpoint_url=aws_params.get(CsParam.ENDPOINT_URL),
+                              aws_access_key_id=aws_params.get(CsParam.ACCESS_KEY),
+                              aws_secret_access_key=aws_params.get(CsParam.SECRET_KEY))
+        if _CS_LOGGERS.get(engine_id):
+            _CS_LOGGERS[engine_id].debug(msg="AWS client created")
+
+    except Exception as e:
+        msg: str = _except_msg(exception=e,
+                               engine_id=engine_id)
+        if _CS_LOGGERS.get(engine_id):
+            _CS_LOGGERS[engine_id].error(msg=msg)
+        if isinstance(errors, list):
+            errors.append(msg)
+    return result
+
+
+def startup(engine_id: str,
+            bucket: str,
+            errors: list[str] = None) -> bool:
+    """
+    Prepare the *AWS* client for operations.
+
+    This function should be called just once, at startup,
+    to make sure the interaction with the AWS service is fully functional.
+
+    :param engine_id: the reference AWS engine
+    :param bucket: the bucket to use (uses the default bucket, if not provided)
+    :param errors: incidental error messages (might be a non-empty list)
+    :return: *True* if service is fully functional, *False* otherwise
+    """
+    # initialize the return variable
+    result: bool = False
+
+    # obtain a client
+    client: BaseClient = get_client(engine_id=engine_id,
+                                    errors=errors)
+    if client:
+        try:
+            client.head_bucket(Bucket=bucket)
+            result = True
+            if _CS_LOGGERS.get(engine_id):
+                _CS_LOGGERS[engine_id].debug(msg=f"Started AWS, bucket '{bucket}' asserted")
+        except Exception as e1:
+            # log the exception and try to create a bucket
+            if _CS_LOGGERS.get(engine_id):
+                _CS_LOGGERS[engine_id].warning(msg=_except_msg(exception=e1,
+                                                               engine_id=engine_id))
+            try:
+                client.create_bucket(Bucket=bucket)
+                result = True
+                if _CS_LOGGERS.get(engine_id):
+                    _CS_LOGGERS[engine_id].debug(msg=f"Started AWS, bucket '{bucket}' created")
+            except Exception as e2:
+                msg = _except_msg(exception=e2,
+                                  engine_id=engine_id)
+                if _CS_LOGGERS.get(engine_id):
+                    _CS_LOGGERS[engine_id].error(msg=msg)
+                if isinstance(errors, list):
+                    errors.append(msg)
+    return result
+
+
+def data_retrieve(engine_id: str,
+                  identifier: str,
+                  bucket: str = None,
+                  prefix: str | Path = None,
+                  data_range: tuple[int, int] = None,
+                  client: BaseClient = None,
+                  errors: list[str] = None) -> bytes | None:
+    """
+    Retrieve data from the *AWS* store.
+
+    :param engine_id: the reference AWS engine
+    :param identifier: the data identifier
+    :param bucket: the bucket to use (uses the default bucket, if not provided)
+    :param prefix: optional path prefixing the item to be retrieved
+    :param data_range: the begin-end positions within the data (in bytes, defaults to *None* - all bytes)
+    :param client: optional AWS client (obtains a new one, if not provided)
+    :param errors: incidental error messages (might be a non-empty list)
+    :return: the bytes retrieved, or *None* if error or data not found
+    """
+    # initialize the return variable
+    result: bytes | None = None
+
+    # make sure to have a client
+    client = client or get_client(engine_id=engine_id,
+                                  errors=errors)
+    if client:
+        # make sure to have a bucket
+        bucket = bucket or _get_param(engine_id=engine_id,
+                                      param=CsParam.BUCKET_NAME)
+        # retrieve the data
+        obj_range: str = f"bytes={data_range[0]}-{data_range[1]}" if data_range else None
+        try:
+            if prefix:
+                obj_path: Path = Path(prefix) / identifier
+                obj_key: str = obj_path.as_posix()
+            else:
+                obj_key: str = identifier
+            reply: dict[str: Any] = client.get_object(Bucket=bucket,
+                                                      Key=obj_key,
+                                                      Range=obj_range)
+            result = reply["Body"]
+            if _CS_LOGGERS.get(engine_id):
+                _CS_LOGGERS[engine_id].debug(msg=f"Retrieved '{obj_key}', bucket '{bucket}'")
+        except Exception as e:
+            # noinspection PyUnresolvedReferences
+            if (not (hasattr(e, "code") and e.code == "NoSuchKey")) and \
+               (not hasattr(e, "response") and (e.response.get("Error") or {}).get("Code") == "404"):
+                msg: str = _except_msg(exception=e,
+                                       engine_id=engine_id)
+                if _CS_LOGGERS.get(engine_id):
+                    _CS_LOGGERS[engine_id].error(msg=msg)
+                if isinstance(errors, list):
+                    errors.append(msg)
+    return result
+
+
+def data_store(engine_id: str,
+               identifier: str,
+               data: bytes | str | BinaryIO,
+               length: int | None,
+               prefix: str | Path = None,
+               mimetype: Mimetype | str = Mimetype.BINARY,
+               tags: dict[str, str] = None,
+               bucket: str = None,
+               client: BaseClient = None,
+               errors: list[str] = None) -> dict[str, str] | None:
+    """
+    Store *data* at the *AWS* store.
+
+    In case *length* cannot be determined, it should be set to  *None*.
+    Note that *length* is the number of bytes of *data* to be stored. This might lead to error when storing
+    strings. In Python, a standard string is a sequence of Unicode code points, not bytes, and thus:
+      - *len(string)*: returns the number of characters (Unicode code points)
+      - *len(string.encode("utf-8"))*: returns the number of bytes the string occupies when encoded
+
+    On success, this operation returns a *dict* with information related to the stored item.
+    Unfortunately, it is not possible to detail the information returned, as there is no consistency
+    in the responses. In fact, the responses vary wildly with the different *AWS* implementations.
+    It should also be noted that those responses are not guaranteed to be serializable.
+
+    :param engine_id: the reference AWS engine
+    :param identifier: the data identifier
+    :param data: the data to store
+    :param bucket: the bucket to use (uses the default bucket, if not provided)
+    :param length:  the length of the data
+    :param prefix: optional destination path prefixing the item holding the data
+    :param mimetype: the data mimetype, defaults to *BINARY*
+    :param tags: optional metadata tags describing the file
+    :param client: optional AWS client (obtains a new one, if not provided)
+    :param errors: incidental error messages (might be a non-empty list)
+    :return: the stored item's properties listed above, or *None* if error
+    """
+    # initialize the return variable
+    result: dict[str, str] | None = None
+
+    # make sure to have a client
+    client = client or get_client(engine_id=engine_id,
+                                  errors=errors)
+    if client:
+        # make sure to have a bucket
+        bucket = bucket or _get_param(engine_id=engine_id,
+                                      param=CsParam.BUCKET_NAME)
+        bin_data: BinaryIO
+        if isinstance(data, BinaryIO):
+            bin_data = data
+        else:
+            bin_data = BytesIO(data) if isinstance(data, bytes) else \
+                       BytesIO(bytes(data, "utf-8"))
+            bin_data.seek(0)
+
+        try:
+            if prefix:
+                obj_path: Path = Path(prefix) / identifier
+                obj_key: str = obj_path.as_posix()
+            else:
+                obj_key: str = identifier
+            if isinstance(mimetype, Mimetype):
+                mimetype = mimetype.value
+
+            # most implementations do not comply with the expected, and well-documented, response
+            result = client.put_object(Body=bin_data,
+                                       Bucket=bucket,
+                                       ContentLength=length,
+                                       ContentType=mimetype,
+                                       Key=obj_key,
+                                       Metadata=_normalize_tags(tags))
+            # if _CS_LOGGERS.get(engine_id):
+            #     _CS_LOGGERS[engine_id].debug(msg=(f"Stored '{obj_key}', bucket '{bucket}', "
+            #                                       f"content type '{mimetype}', tags '{tags}'"))
+        except Exception as e:
+            msg: str = _except_msg(exception=e,
+                                   engine_id=engine_id)
+            if _CS_LOGGERS.get(engine_id):
+                _CS_LOGGERS[engine_id].error(msg=msg)
+            if isinstance(errors, list):
+                errors.append(msg)
+    return result
+
+
+def file_retrieve(engine_id: str,
+                  identifier: str,
+                  filepath: Path | str,
+                  bucket: str = None,
+                  prefix: str | Path = None,
+                  client: BaseClient = None,
+                  errors: list[str] = None) -> bool | None:
+    """
+    Retrieve a file from the *AWS* store.
+
+    :param engine_id: the reference AWS engine
+    :param identifier: the file identifier, tipically a file name
+    :param filepath: the path to save the retrieved file at
+    :param bucket: the bucket to use (uses the default bucket, if not provided)
+    :param prefix: optional path prefixing the item to retrieve as a file
+    :param client: optional AWS client (obtains a new one, if not provided)
+    :param errors: incidental error messages (might be a non-empty list)
+    :return: *True* if the file was retrieved, *False* otherwise, or *None* if error
+    """
+    # initialize the return variable
+    result: bool | None = None
+
+    # make sure to have a client
+    client = client or get_client(engine_id=engine_id,
+                                  errors=errors)
+    if client:
+        # make sure to have a bucket
+        bucket = bucket or _get_param(engine_id=engine_id,
+                                      param=CsParam.BUCKET_NAME)
+        try:
+            if prefix:
+                obj_path: Path = Path(prefix) / identifier
+                obj_key: str = obj_path.as_posix()
+            else:
+                obj_key: str = identifier
+            file_path: str = Path(filepath).as_posix()
+            client.download_file(Bucket=bucket,
+                                 Filename=file_path,
+                                 Key=obj_key)
+            result = Path(filepath).exists()
+            if _CS_LOGGERS.get(engine_id):
+                _CS_LOGGERS[engine_id].debug(msg=f"{obj_key}', bucket '{bucket}', "
+                                                 f"{'retrieved' if result else 'not retrieved'}")
+        except Exception as e:
+            # noinspection PyUnresolvedReferences
+            if (not (hasattr(e, "code") and e.code == "NoSuchKey")) and \
+               (not hasattr(e, "response") and (e.response.get("Error") or {}).get("Code") == "404"):
+                msg: str = _except_msg(exception=e,
+                                       engine_id=engine_id)
+                if _CS_LOGGERS.get(engine_id):
+                    _CS_LOGGERS[engine_id].error(msg=msg)
+                if isinstance(errors, list):
+                    errors.append(msg)
+    return result
+
+
+def file_store(engine_id: str,
+               identifier: str,
+               filepath: Path | str,
+               mimetype: Mimetype | str,
+               bucket: str = None,
+               prefix: str | Path = None,
+               tags: dict[str, str] = None,
+               client: BaseClient = None,
+               errors: list[str] = None) -> bool:
+    """
+    Store a file at the *AWS* store.
+
+    :param engine_id: the reference AWS engine
+    :param identifier: the file identifier, tipically a file name
+    :param filepath: optional path specifying where the file is
+    :param mimetype: the file mimetype
+    :param bucket: the bucket to use (uses the default bucket, if not provided)
+    :param prefix: optional destination path prefixing the item holding the file data
+    :param tags: optional metadata tags describing the file
+    :param client: optional AWS client (obtains a new one, if not provided)
+    :param errors: incidental error messages (might be a non-empty list)
+    :return: *True* if the file was successfully stored, *False* if error
+    """
+    # initialize the return variable
+    result: bool = False
+
+    # make sure to have a client
+    client = client or get_client(engine_id=engine_id,
+                                  errors=errors)
+    if client:
+        # make sure to have a bucket
+        bucket = bucket or _get_param(engine_id=engine_id,
+                                      param=CsParam.BUCKET_NAME)
+
+        extra_args: dict[str, Any] | None = None
+        if mimetype or tags:
+            extra_args = {}
+            if mimetype:
+                if isinstance(mimetype, Mimetype):
+                    mimetype = mimetype.value
+                extra_args["ContentType"] = mimetype
+            if tags:
+                extra_args["Metadata"] = _normalize_tags(tags)
+
+        # store the file
+        try:
+            if prefix:
+                obj_path: Path = Path(prefix) / identifier
+                obj_key: str = obj_path.as_posix()
+            else:
+                obj_key: str = identifier
+            file_path: str = Path(filepath).as_posix()
+            client.upload_file(Filename=file_path,
+                               Bucket=bucket,
+                               Key=obj_key,
+                               ExtraArgs=extra_args)
+            # if _CS_LOGGERS.get(engine_id):
+            #     _CS_LOGGERS[engine_id].debug(msg=f"Stored '{obj_key}', "
+            #                                      f"bucket '{bucket}', from '{file_path}', "
+            #                                      f"content type '{mimetype}', tags '{tags}'")
+            result = True
+        except Exception as e:
+            msg: str = _except_msg(exception=e,
+                                   engine_id=engine_id)
+            if _CS_LOGGERS.get(engine_id):
+                _CS_LOGGERS[engine_id].error(msg=msg)
+            if isinstance(errors, list):
+                errors.append(msg)
+
+    return result
+
+
+def item_get_info(engine_id: str,
+                  identifier: str,
+                  attributes: list[str],
+                  prefix: str | Path = None,
+                  bucket: str = None,
+                  client: BaseClient = None,
+                  errors: list[str] = None) -> dict[str, Any] | None:
+    """
+    Retrieve information about an item in the *AWS* store.
+
+    The complete information that can be returned is shown below. The parameter *attributes* must contain
+    one or more of the first-level attributes listed. Please refer to the published *AWS* documentation
+    for the meaning of any of these attributes.
+    {
+        'DeleteMarker': True|False,
+        'LastModified': datetime(2015, 1, 1),
+        'VersionId': 'string',
+        'RequestCharged': 'requester',
+        'ETag': 'string',
+        'Checksum': {
+            'ChecksumCRC32': 'string',
+            'ChecksumCRC32C': 'string',
+            'ChecksumSHA1': 'string',
+            'ChecksumSHA256': 'string'
+        },
+        'ObjectParts': {
+            'TotalPartsCount': 123,
+            'PartNumberMarker': 123,
+            'NextPartNumberMarker': 123,
+            'MaxParts': 123,
+            'IsTruncated': True|False,
+            'Parts': [
+                {
+                    'PartNumber': 123,
+                    'Size': 123,
+                    'ChecksumCRC32': 'string',
+                    'ChecksumCRC32C': 'string',
+                    'ChecksumSHA1': 'string',
+                    'ChecksumSHA256': 'string'
+                },
+            ]
+        },
+        'StorageClass': 'STANDARD' | 'REDUCED_REDUNDANCY' | 'STANDARD_IA' | 'ONEZONE_IA' |
+                        'INTELLIGENT_TIERING' | 'GLACIER' | 'DEEP_ARCHIVE' | 'OUTPOSTS' |
+                        'GLACIER_IR' | 'SNOW' | 'EXPRESS_ONEZONE',
+        'ObjectSize': 123
+    }
+
+    :param engine_id: the reference AWS engine
+    :param identifier: the item identifier
+    :param attributes: the item's attributes to be returned
+    :param prefix: optional path prefixing the item
+    :param bucket: the bucket to use (uses the default bucket, if not provided)
+    :param client: optional AWS client (obtains a new one, if not provided)
+    :param errors: incidental error messages (might be a non-empty list)
+    :return: information about the item, or *None* if error or item not found
+    """
+    # initialize the return variable
+    result: dict[str, Any] | None = None
+
+    # make sure to have a client
+    client = client or get_client(engine_id=engine_id,
+                                  errors=errors)
+    if client:
+        # make sure to have a bucket
+        bucket = bucket or _get_param(engine_id=engine_id,
+                                      param=CsParam.BUCKET_NAME)
+        try:
+            if prefix:
+                obj_path: Path = Path(prefix) / identifier
+                obj_key: str = obj_path.as_posix()
+            else:
+                obj_key: str = identifier
+            result = client.get_object_attributes(Bucket=bucket,
+                                                  Key=obj_key,
+                                                  ObjectAttributes=attributes)
+            if _CS_LOGGERS.get(engine_id):
+                _CS_LOGGERS[engine_id].debug(msg=f"Got info for '{obj_key}', bucket '{bucket}'")
+        except Exception as e:
+            # noinspection PyUnresolvedReferences
+            if (not (hasattr(e, "code") and e.code == "NoSuchKey")) and \
+               (not hasattr(e, "response") and (e.response.get("Error") or {}).get("Code") == "404"):
+                msg: str = _except_msg(exception=e,
+                                       engine_id=engine_id)
+                if _CS_LOGGERS.get(engine_id):
+                    _CS_LOGGERS[engine_id].error(msg=msg)
+                if isinstance(errors, list):
+                    errors.append(msg)
+    return result
+
+
+def item_get_tags(engine_id: str,
+                  identifier: str,
+                  prefix: str | Path = None,
+                  bucket: str = None,
+                  client: BaseClient = None,
+                  errors: list[str] = None) -> dict[str, str] | None:
+    """
+    Retrieve the existing metadata tags for an item in the *AWS* store.
+
+    If item has no associated metadata tags, an empty *dict* is returned. The information returned
+    by the native invocation is shown below. The *dict* returned is the value of the *Metadata* attribute.
+    Please refer to the published *AWS* documentation for the meaning of any of these attributes.
+    {
+        'DeleteMarker': True|False,
+        'AcceptRanges': 'string',
+        'Expiration': 'string',
+        'Restore': 'string',
+        'ArchiveStatus': 'ARCHIVE_ACCESS'|'DEEP_ARCHIVE_ACCESS',
+        'LastModified': datetime(2015, 1, 1),
+        'ContentLength': 123,
+        'ChecksumCRC32': 'string',
+        'ChecksumCRC32C': 'string',
+        'ChecksumSHA1': 'string',
+        'ChecksumSHA256': 'string',
+        'ETag': 'string',
+        'MissingMeta': 123,
+        'VersionId': 'string',
+        'CacheControl': 'string',
+        'ContentDisposition': 'string',
+        'ContentEncoding': 'string',
+        'ContentLanguage': 'string',
+        'ContentType': 'string',
+        'Expires': datetime(2015, 1, 1),
+        'WebsiteRedirectLocation': 'string',
+        'ServerSideEncryption': 'AES256'|'aws:kms'|'aws:kms:dsse',
+        'Metadata': {
+            'string': 'string'
+        },
+        'SSECustomerAlgorithm': 'string',
+        'SSECustomerKeyMD5': 'string',
+        'SSEKMSKeyId': 'string',
+        'BucketKeyEnabled': True|False,
+        'StorageClass': 'STANDARD' | 'REDUCED_REDUNDANCY' | 'STANDARD_IA' | 'ONEZONE_IA' |
+                        'INTELLIGENT_TIERING' | 'GLACIER' | 'DEEP_ARCHIVE' | 'OUTPOSTS' |
+                        'GLACIER_IR' | 'SNOW' | 'EXPRESS_ONEZONE',
+        'RequestCharged': 'requester',
+        'ReplicationStatus': 'COMPLETE'|'PENDING'|'FAILED'|'REPLICA'|'COMPLETED',
+        'PartsCount': 123,
+        'ObjectLockMode': 'GOVERNANCE'|'COMPLIANCE',
+        'ObjectLockRetainUntilDate': datetime(2015, 1, 1),
+        'ObjectLockLegalHoldStatus': 'ON'|'OFF'
+    }
+
+    :param engine_id: the reference AWS engine
+    :param identifier: the item identifier
+    :param prefix: optional path prefixing the item
+    :param bucket: the bucket to use (uses the default bucket, if not provided)
+    :param client: optional AWS client (obtains a new one, if not provided)
+    :param errors: incidental error messages (might be a non-empty list)
+    :return: the metadata tags associated with the item, or *None* if error or item not found
+    """
+    # initialize the return variable
+    result: dict[str, Any] | None = None
+
+    # make sure to have a client
+    client = client or get_client(engine_id=engine_id,
+                                  errors=errors)
+    if client:
+        # make sure to have a bucket
+        bucket = bucket or _get_param(engine_id=engine_id,
+                                      param=CsParam.BUCKET_NAME)
+        try:
+            if prefix:
+                obj_path: Path = Path(prefix) / identifier
+                obj_key: str = obj_path.as_posix()
+            else:
+                obj_key: str = identifier
+            head_info: dict[str, str] = client.head_object(Bucket=bucket,
+                                                           Key=obj_key)
+            # make sure at least an empty dict is returned
+            result = head_info.get("Metadata", {})
+            if _CS_LOGGERS.get(engine_id):
+                _CS_LOGGERS[engine_id].debug(msg=f"Retrieved '{obj_key}', bucket '{bucket}', tags '{result}'")
+        except Exception as e:
+            # noinspection PyUnresolvedReferences
+            if (not (hasattr(e, "code") and e.code == "NoSuchKey")) and \
+               (not hasattr(e, "response") and (e.response.get("Error") or {}).get("Code") == "404"):
+                msg: str = _except_msg(exception=e,
+                                       engine_id=engine_id)
+                if _CS_LOGGERS.get(engine_id):
+                    _CS_LOGGERS[engine_id].error(msg=msg)
+                if isinstance(errors, list):
+                    errors.append(msg)
+    return result
+
+
+def item_remove(engine_id: str,
+                identifier: str,
+                prefix: str | Path = None,
+                version: str = None,
+                bucket: str = None,
+                client: BaseClient = None,
+                errors: list[str] = None) -> bool | None:
+    """
+    Remove an item from the *AWS* store.
+
+    If *version* is not specified, then only the item's current (latest) version is removed.
+
+    :param engine_id: the reference AWS engine
+    :param identifier: the item identifier
+    :param prefix: optional path prefixing the item to be removed
+    :param version: optional version of the item to be removed (defaults to its current version)
+    :param bucket: the bucket to use (uses the default bucket, if not provided)
+    :param client: optional AWS client (obtains a new one, if not provided)
+    :param errors: incidental error messages (might be a non-empty list)
+    :return: *True* if the item was successfully removed, *False* otherwise, *None* if error
+    """
+    # initialize the return variable
+    result: bool | None = None
+
+    # make sure to have a client
+    client = client or get_client(engine_id=engine_id,
+                                  errors=errors)
+    if client:
+        # make sure to have a bucket
+        bucket = bucket or _get_param(engine_id=engine_id,
+                                      param=CsParam.BUCKET_NAME)
+        if prefix:
+            path: Path = Path(prefix) / identifier
+            key: str = path.as_posix()
+        else:
+            key: str = identifier
+        # remove the item
+        try:
+            # expected response:
+            # {
+            #     'DeleteMarker': True|False,
+            #     'VersionId': 'string',
+            #     'RequestCharged': 'requester'
+            # }
+            reply: dict[str, Any] = client.delete_object(Bucket=bucket,
+                                                         Key=key,
+                                                         VersionId=version)
+            if _CS_LOGGERS.get(engine_id):
+                _CS_LOGGERS[engine_id].debug(msg=f"Deleted '{key}', bucket '{bucket}'")
+            result = reply.get("DeleteMarker")
+        except Exception as e:
+            # noinspection PyUnresolvedReferences
+            if (not (hasattr(e, "code") and e.code == "NoSuchKey")) and \
+               (not hasattr(e, "response") and (e.response.get("Error") or {}).get("Code") == "404"):
+                msg: str = _except_msg(exception=e,
+                                       engine_id=engine_id)
+                if _CS_LOGGERS.get(engine_id):
+                    _CS_LOGGERS[engine_id].error(msg=msg)
+                if isinstance(errors, list):
+                    errors.append(msg)
+    return result
+
+
+def items_get_info(engine_id: str,
+                   attrs: list[str],
+                   prefix: str | Path,
+                   max_count: int = None,
+                   start_after: str = None,
+                   bucket: str = None,
+                   client: BaseClient = None,
+                   errors: list[str] = None) -> list[dict[str, Any]] | None:
+    """
+    Recursively retrieve and return information on a list of items prefixed with *prefix*, in the *AWS* store.
+
+    If *prefix* is not specified, then the bucket's root is used. If *max_count* is a positive integer,
+    the number of items returned may be less, but not more, than its value, otherwise it is ignored, and
+    all existing items in *prefix* are returned. Optionally, *start_after* identifies the item after which
+    the listing must start, thus allowing for paginating the items retrieval operation.
+
+    The information returned by the native invocation, lexicographically sorted by *Key* in *Contents*,
+    is shown below. The parameter *attrs* must contain one or more of the first-level attributes within the
+    *Contents* attribute. Refer to the published *AWS* documentation for the meaning of these attributes.
+    {
+        'IsTruncated': True|False,
+        'Contents': [
+            {
+                'Key': 'string',
+                'LastModified': datetime(2015, 1, 1),
+                'ETag': 'string',
+                'ChecksumAlgorithm': [
+                    'CRC32'|'CRC32C'|'SHA1'|'SHA256',
+                ],
+                'Size': 123,
+                'StorageClass': 'STANDARD' | 'REDUCED_REDUNDANCY' | 'STANDARD_IA' | 'ONEZONE_IA' |
+                                'INTELLIGENT_TIERING' | 'GLACIER' | 'DEEP_ARCHIVE' | 'OUTPOSTS' |
+                                'GLACIER_IR' | 'SNOW' | 'EXPRESS_ONEZONE',
+                'Owner': {
+                    'DisplayName': 'string',
+                    'ID': 'string'
+                },
+                'RestoreStatus': {
+                    'IsRestoreInProgress': True|False,
+                    'RestoreExpiryDate': datetime(2015, 1, 1)
+                }
+            },
+        ],
+        'Name': 'string',
+        'Prefix': 'string',
+        'Delimiter': 'string',
+        'MaxKeys': 123,
+        'CommonPrefixes': [
+            {
+                'Prefix': 'string'
+            },
+        ],
+        'EncodingType': 'url',
+        'KeyCount': 123,
+        'ContinuationToken': 'string',
+        'NextContinuationToken': 'string',
+        'StartAfter': 'string',
+        'RequestCharged': 'requester'
+    }
+
+    :param engine_id: the reference AWS engine
+    :param attrs: the items' attributes to be returned
+    :param prefix: path prefixing the items to be listed
+    :param max_count: the maximum number of items to return (defaults to all items)
+    :param start_after: optionally identifies the item after which to start the listing (defaults to first item)
+    :param bucket: the bucket to use (uses the default bucket, if not provided)
+    :param client: optional AWS client (obtains a new one, if not provided)
+    :param errors: incidental error messages (might be a non-empty list)
+    :return: information on a list of items in *prefix*, or *None* if error or *prefix* not found
+    """
+    # initialize the return variable
+    result: list[dict[str, Any]] | None = None
+
+    # make sure to have a client
+    client = client or get_client(engine_id=engine_id,
+                                  errors=errors)
+    if client:
+        # make sure to have a bucket
+        bucket = bucket or _get_param(engine_id=engine_id,
+                                      param=CsParam.BUCKET_NAME)
+        # must terminate with '/', otherwise only the folder is considered
+        path: str = Path(prefix).as_posix() + "/" if prefix else None
+        if not isinstance(max_count, int) or \
+           isinstance(max_count, bool) or max_count < 0:
+            max_count = 0
+        max_keys: int = max_count if 0 < max_count < 1000 else 1000
+        try:
+            items: list[dict[str, Any]] = []
+            proceed: bool = True
+            while proceed:
+                # retrieve up to 1000 objects at a time
+                reply: dict[str, Any]
+                # will raise an error if 'StartAfter' is set to 'None'
+                if start_after:
+                    reply = client.list_objects_v2(Bucket=bucket,
+                                                   Prefix=path,
+                                                   Delimiter="/",
+                                                   MaxKeys=max_keys,
+                                                   StartAfter=start_after)
+                else:
+                    reply = client.list_objects_v2(Bucket=bucket,
+                                                   Prefix=path,
+                                                   Delimiter="/",
+                                                   MaxKeys=max_keys)
+                # retrieve from the list (it might be empty)
+                proceed = False
+                objs: list[dict[str, Any]] = reply.get("Contents")
+                if objs:
+                    rem: int = min(max_count - len(items), len(objs)) if max_count else len(objs)
+                    items.extend(objs[:rem])
+                    rem = max_count - len(items) if max_count else 1000
+                    if rem > 0:
+                        # get the last key read
+                        start_after = objs[-1].get("Key")
+                        # set the value for the 'MaxKeys' parameter in the next objects retrieval
+                        max_keys = min(max_keys, rem)
+                        proceed = True
+
+            # save the items and log the results
+            result = []
+            for item in items:
+                result.append({k: v for k, v in item.items() if k in attrs})
+            if _CS_LOGGERS.get(engine_id):
+                msg: str = f"Listed {len(result)} items in '{prefix}', bucket '{bucket}'"
+                if start_after:
+                    msg += f", starting after {start_after}"
+                _CS_LOGGERS[engine_id].debug(msg=msg)
+        except Exception as e:
+            msg: str = _except_msg(exception=e,
+                                   engine_id=engine_id)
+            if _CS_LOGGERS.get(engine_id):
+                _CS_LOGGERS[engine_id].error(msg=msg)
+            if isinstance(errors, list):
+                errors.append(msg)
+    return result
+
+
+def items_count(engine_id: str,
+                prefix: str | Path | None,
+                bucket: str = None,
+                client: BaseClient = None,
+                errors: list[str] = None) -> int | None:
+    """
+    Retrieve the number of items prefixed with *prefix*, in the *AWS* store.
+
+    If *prefix* is not specified, then the bucket's root is used. A count operation on the contents
+    of a *prefix* may be time-consuming, as the least inefficient way to obtain such information with the
+    *boto3* package is by paginating the elements and accounting for the sizes of these pages.
+
+    :param engine_id: the reference AWS engine
+    :param prefix: path prefixing the items to be counted
+    :param bucket: the bucket to use (uses the default bucket, if not provided)
+    :param client: optional AWS client (obtains a new one, if not provided)
+    :param errors: incidental error messages (might be a non-empty list)
+    :return: the number of items in *prefix*, 0 if *prefix* not found, or *None* if error
+    """
+    # initialize the return variable
+    result: int | None = None
+
+    # make sure to have a client
+    client = client or get_client(engine_id=engine_id,
+                                  errors=errors)
+    if client:
+        # make sure to have a bucket
+        bucket = bucket or _get_param(engine_id=engine_id,
+                                      param=CsParam.BUCKET_NAME)
+        try:
+            # initialize a page iterator
+            paginator: Paginator = client.get_paginator(operation_name="list_objects_v2")
+            iterator: PageIterator = paginator.paginate(Bucket=bucket,
+                                                        Prefix=Path(prefix).as_posix() if prefix else None,
+                                                        Delimiter="/")
+            # traverse the pages, counting the items
+            result = sum(page.get("KeyCount", 0) for page in iterator)
+            if _CS_LOGGERS.get(engine_id):
+                _CS_LOGGERS[engine_id].debug(msg=f"Counted {result} items in '{prefix}', bucket '{bucket}'")
+        except Exception as e:
+            msg: str = _except_msg(exception=e,
+                                   engine_id=engine_id)
+            if _CS_LOGGERS.get(engine_id):
+                _CS_LOGGERS[engine_id].error(msg=msg)
+            if isinstance(errors, list):
+                errors.append(msg)
+
+    return result
+
+
+def items_get_names(engine_id: str,
+                    prefix: str | Path,
+                    max_count: int = None,
+                    start_after: str = None,
+                    bucket: str = None,
+                    client: BaseClient = None,
+                    errors: list[str] = None) -> list[dict[str, Any]] | None:
+    """
+    Recursively retrieve and return the names of items prefixed with *prefix*, in the *AWS* store.
+
+    If *prefix* is not specified, then the bucket's root is used. If *max_count* is a positive integer,
+    the number of items returned may be less, but not more, than its value, otherwise it is ignored, and
+    all existing items in *prefix* are returned. Optionally, *start_after* identifies the item after which
+    the listing must start, thus allowing for paginating the item names retrieval operation.
+
+    :param engine_id: the reference AWS engine
+    :param prefix: path prefixing the items to be listed
+    :param max_count: the maximum number of items to return (defaults to all items)
+    :param start_after: optionally identifies the name after which to start the listing (defaults to first item)
+    :param bucket: the bucket to use (uses the default bucket, if not provided)
+    :param client: optional AWS client (obtains a new one, if not provided)
+    :param errors: incidental error messages (might be a non-empty list)
+    :return: names of items in *prefix*, or *None* if error or *prefix* not found
+    """
+    # initialize the return variable
+    result: list[str] | None = None
+
+    # make sure to have a client
+    client = client or get_client(engine_id=engine_id,
+                                  errors=errors)
+    if client:
+        # make sure to have a bucket
+        bucket = bucket or _get_param(engine_id=engine_id,
+                                      param=CsParam.BUCKET_NAME)
+        # must terminate with '/', otherwise only the folder is considered
+        path: str = Path(prefix).as_posix() + "/" if prefix else None
+        if not isinstance(max_count, int) or \
+           isinstance(max_count, bool) or max_count < 0:
+            max_count = 0
+        max_keys: int = max_count if 0 < max_count < 1000 else 1000
+        try:
+            items: list[dict[str, Any]] = []
+            proceed: bool = True
+            while proceed:
+                # retrieve up to 1000 objects at a time
+                reply: dict[str, Any]
+                # will raise an error if 'StartAfter' is set to 'None'
+                if start_after:
+                    reply = client.list_objects_v2(Bucket=bucket,
+                                                   Prefix=path,
+                                                   Delimiter="/",
+                                                   MaxKeys=max_keys,
+                                                   StartAfter=start_after)
+                else:
+                    reply = client.list_objects_v2(Bucket=bucket,
+                                                   Prefix=path,
+                                                   Delimiter="/",
+                                                   MaxKeys=max_keys)
+                # retrieve from the list (it might be empty)
+                proceed = False
+                objs: list[dict[str, Any]] = reply.get("Contents")
+                if objs:
+                    rem: int = min(max_count - len(items), len(objs)) if max_count else len(objs)
+                    items.extend(objs[:rem])
+                    rem = max_count - len(items) if max_count else 1000
+                    if rem > 0:
+                        # get the last key read
+                        start_after = objs[-1].get("Key")
+                        # set the value for the 'MaxKeys' parameter in the next objects retrieval
+                        max_keys = min(max_keys, rem)
+                        proceed = True
+
+            # save the items and log the results
+            result = []
+            for item in items:
+                result.append(item.get("Key"))
+            if _CS_LOGGERS.get(engine_id):
+                msg: str = f"Listed {len(result)} names in '{prefix}', bucket '{bucket}'"
+                if start_after:
+                    msg += f", starting after {start_after}"
+                _CS_LOGGERS[engine_id].debug(msg=msg)
+        except Exception as e:
+            msg: str = _except_msg(exception=e,
+                                   engine_id=engine_id)
+            if _CS_LOGGERS.get(engine_id):
+                _CS_LOGGERS[engine_id].error(msg=msg)
+            if isinstance(errors, list):
+                errors.append(msg)
+    return result
+
+
+def items_remove(engine_id: str,
+                 identifiers: list[str | tuple[str, str]] = None,
+                 prefix: str | Path = None,
+                 bucket: str = None,
+                 client: BaseClient = None,
+                 errors: list[str] = None) -> int:
+    """
+    Remove the items listed in *identifiers* from the *AWS* store.
+
+    The items to be removed are listed in *identifiers*, either with a simple *name*, or with
+    a *name,version* pair. If the version is not provided for a given item, then only its
+    current (latest) version is removed. Items in *identifiers* are ignored, if not found.
+    If *identifiers* is not provided, then all items prefixed with *prefix* are removed.
+
+    The removal operation will attempt to continue if errors occur. Thus, make sure to check *errors*,
+    besides inspecting the returned value.
+
+    :param engine_id: the reference AWS engine
+    :param identifiers: optional identifiers for the items to be removed
+    :param prefix: optional path prefixing the items to be removed
+    :param bucket: the bucket to use (uses the default bucket, if not provided)
+    :param client: optional AWS client (obtains a new one, if not provided)
+    :param errors: incidental error messages (might be a non-empty list)
+    :return: The number of items successfully removed
+    """
+    # initialize the return variable
+    result: int = 0
+
+    if identifiers:
+        # make sure to have a client
+        client = client or get_client(engine_id=engine_id,
+                                      errors=errors)
+        if client:
+            # make sure to have a bucket
+            bucket = bucket or _get_param(engine_id=engine_id,
+                                          param=CsParam.BUCKET_NAME)
+            # establish a path prefix
+            path: Path = Path(prefix) if isinstance(prefix, str) else prefix
+
+            # a maximum of 1000 items may be sent for deletion
+            pos: int = 0
+            size: int = min(1000, len(identifiers))
+            while size > 0:
+                items: list[dict[str, Any]] = []
+                for identifier in identifiers[pos:pos+size]:
+                    if isinstance(identifier, tuple):
+                        items.append({
+                            "Key": (path / identifier[0]).as_posix() if path else identifier[0],
+                            "VersionId": identifier[1]
+                        })
+                    else:
+                        items.append({"Key": (path / identifier).as_posix() if path else identifier})
+                deletes: dict[str, Any] = {
+                    "Objects": items
+                }
+                try:
+                    # 'reply' will contain 2 lists:
+                    #   - 'Deleted': successful
+                    #   - 'Errors': failed
+                    reply: dict[str, Any] = client.delete_objects(Bucket=bucket,
+                                                                  Delete=deletes)
+                    result += len(reply.get("Deleted", []))
+                    # acknowledge errors eventually reported
+                    if isinstance(errors, list):
+                        errors.extend([f"Error {e.get('Code')} ({e.get('Message')}) "
+                                       f"removing document ({e.get('Key')}, v. {e.get('VersionId')}"
+                                       for e in reply.get("Errors", [])])
+                except Exception as e:
+                    msg: str = _except_msg(exception=e,
+                                           engine_id=engine_id)
+                    if _CS_LOGGERS.get(engine_id):
+                        _CS_LOGGERS[engine_id].error(msg=msg)
+                    if isinstance(errors, list):
+                        errors.append(msg)
+                pos += size
+                size = min(1000, len(identifiers) - pos)
+    elif prefix:
+        result = prefix_remove(engine_id=engine_id,
+                               prefix=prefix,
+                               bucket=bucket,
+                               client=client,
+                               errors=errors)
+    elif isinstance(errors, list):
+        errors.append("Either 'identifiers' or 'prefix' must be provided")
+
+    return result
+
+
+def prefix_remove(engine_id: str,
+                  prefix: str | Path,
+                  bucket: str = None,
+                  client: BaseClient = None,
+                  errors: list[str] = None) -> int:
+    """
+    Remove the items prefixed with *prefix* from the *AWS* store.
+
+    If *prefix* is not specified, then the bucket's root is used. Note that, at *AWS* storages,
+    prefixes are visual representations, and as such disappear when not in use. The removal operation
+    will attempt to continue if errors occur. Thus, make sure to check *errors*, besides inspecting
+    the returned value.
+
+    :param engine_id: the reference AWS engine
+    :param prefix: path prefixing the items to be removed
+    :param bucket: the bucket to use (uses the default bucket, if not provided)
+    :param client: optional AWS client (obtains a new one, if not provided)
+    :param errors: incidental error messages (might be a non-empty list)
+    :return: The number of items successfully removed
+    """
+    # initialize the return variable
+    result: int = 0
+
+    # make sure to have a client
+    client = client or get_client(engine_id=engine_id,
+                                  errors=errors)
+    if client:
+        # make sure to have a bucket
+        bucket = bucket or _get_param(engine_id=engine_id,
+                                      param=CsParam.BUCKET_NAME)
+        items: list[dict[str, Any]] = items_get_info(engine_id=engine_id,
+                                                     attrs=["Key"],
+                                                     bucket=bucket,
+                                                     prefix=prefix,
+                                                     client=client,
+                                                     errors=errors)
+        if items is not None:
+            # a maximum of 1000 items may be sent for deletion
+            identifiers: list[str] = [i.get("Key") for i in (items or [])]
+            pos: int = 0
+            size: int = min(1000, len(identifiers))
+            while size > 0:
+                items: list[dict[str, Any]] = []
+                for identifier in identifiers[pos:pos+size]:
+                    items.append({"Key": identifier})
+                deletes: dict[str, Any] = {
+                    "Objects": items
+                }
+                try:
+                    reply: dict[str, Any] = client.delete_objects(Bucket=bucket,
+                                                                  Delete=deletes)
+                    result += len(reply.get("Deleted", []))
+                    # acknowledge errors eventually reported
+                    if isinstance(errors, list):
+                        errors.extend([f"Error {e.get('Code')} ({e.get('Message')}) "
+                                       f"removing document ({e.get('Key')}, v. {e.get('VersionId')}"
+                                       for e in reply.get("Errors", [])])
+                except Exception as e:
+                    msg: str = _except_msg(exception=e,
+                                           engine_id=engine_id)
+                    if _CS_LOGGERS.get(engine_id):
+                        _CS_LOGGERS[engine_id].error(msg=msg)
+                    if isinstance(errors, list):
+                        errors.append(msg)
+                pos += size
+                size = min(1000, len(identifiers) - pos)
+
+    return result
+
+
+def generate_presigned_url(engine_id: str,
+                           identifier: str,
+                           expires_in: int,
+                           prefix: str | Path = None,
+                           bucket: str = None,
+                           client: BaseClient = None,
+                           errors: list[str] = None) -> str:
+    """
+    Generate a presigned URL that grants time-limited, no credentials required, access to a private AWS object.
+
+    :param engine_id: the reference AWS engine
+    :param identifier: the data identifier
+    :param expires_in: time until expiration (in seconds, defaults to 3600)
+    :param prefix: optional path prefixing the item to be retrieved
+    :param bucket: the bucket to use (uses the default bucket, if not provided)
+    :param client: optional AWS client (obtains a new one, if not provided)
+    :param errors: incidental error messages (might be a non-empty list)
+    :return: the URL generated, or *None* if error or data not found
+    """
+    # initialize the return variable
+    result: str | None = None
+
+    # make sure to have a client
+    client = client or get_client(engine_id=engine_id,
+                                  errors=errors)
+    if client:
+        # make sure to have a bucket
+        bucket = bucket or _get_param(engine_id=engine_id,
+                                      param=CsParam.BUCKET_NAME)
+        # generate the URL
+        try:
+            if prefix:
+                obj_path: Path = Path(prefix) / identifier
+                obj_key: str = obj_path.as_posix()
+            else:
+                obj_key: str = identifier
+            result = client.generate_presigned_url(ClientMethod="get_object",
+                                                   Params={"Bucket": bucket,
+                                                           "Key": obj_key},
+                                                   ExpiresIn=expires_in)
+            if _CS_LOGGERS.get(engine_id):
+                _CS_LOGGERS[engine_id].debug(msg=f"Generated presigned URL for '{obj_key}', bucket '{bucket}'")
+        except Exception as e:
+            # noinspection PyUnresolvedReferences
+            if (not (hasattr(e, "code") and e.code == "NoSuchKey")) and \
+               (not hasattr(e, "response") and (e.response.get("Error") or {}).get("Code") == "404"):
+                msg: str = _except_msg(exception=e,
+                                       engine_id=engine_id)
+                if _CS_LOGGERS.get(engine_id):
+                    _CS_LOGGERS[engine_id].error(msg=msg)
+                if isinstance(errors, list):
+                    errors.append(msg)
+    return result

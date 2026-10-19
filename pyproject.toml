@@ -1,0 +1,31 @@
+[build-system]
+requires = [
+    "hatchling>=1.32.4"
+]
+build-backend = "hatchling.build"
+
+[project]
+name = "pypomes_cs"
+version = "1.0.0"
+authors = [
+  { name="GT Nunes", email="wisecoder01@gmail.com" }
+]
+description = "A collection of Python pomes, penyeach (cloud storage modules)"
+readme = "README.md"
+requires-python = ">=3.14"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent"
+]
+dependencies = [
+    "pypomes-core>=3.3.2",
+    "Unidecode>=1.4.0"
+#   "boto3>=1.43.114"
+#   "minio>=7.2.20"
+#   "google-cloud-storage>=3.17.1"
+]
+
+[project.urls]
+"Homepage" = "https://github.com/TheWiseCoder/PyPomes-S3"
+"Bug Tracker" = "https://github.com/TheWiseCoder/PyPomes-S3/issues"
