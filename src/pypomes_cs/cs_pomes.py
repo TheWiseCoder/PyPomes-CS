@@ -5,8 +5,7 @@ from pypomes_core import Mimetype
 from typing import Any, BinaryIO
 
 from .cs_common import (
-    _CS_ACCESS_DATA, _CS_LOGGERS, CsEngine, CsParam,
-    _assert_engine, _get_param, _except_msg
+    CS_ACCESS_DATA, CsEngine, CsParam, _assert_engine, _get_param, _except_msg
 )
 
 
@@ -16,10 +15,11 @@ def cs_setup(*,
              bucket_name: str,
              access_key: str,
              secret_key: str,
-             cs_type: CsEngine = None,
+             engine_type: CsEngine = None,
              region_name: str = None,
              secure_access: bool = None,
-             logger: Logger = None) -> bool:
+             logger: Logger = None,
+             errors: list[str] = None) -> bool:
     """
     Establish the parameters for access to *engine* of type *AWS* or *MinIO*.
 
@@ -32,38 +32,47 @@ def cs_setup(*,
     :param bucket_name: the name of the default bucket
     :param access_key: the access key for the service
     :param secret_key: the access secret code
-    :param cs_type: the *CS* engine type (one of [*aws*, *minio*])
+    :param engine_type: the *CS* engine type (one of [*aws*, *minio*])
     :param region_name: the name of the region where the engine is located
     :param secure_access: whether to use Transport Security Layer
     :param logger: the logger for the *CS* engine
+    :param errors: incidental error messages (may be a non-empty list)
     :return: *True* if the parameters were accepted, *False* otherwise
     """
     # initialize the return variable
     result: bool = False
 
     if isinstance(engine, CsEngine):
-        if not cs_type:
-            cs_type = engine
+        if not engine_type:
+            engine_type = engine
         engine = engine.value
 
     # process the parameters
-    if isinstance(cs_type, CsEngine) and cs_type != CsEngine.GCS and \
-       endpoint_url and bucket_name and access_key and secret_key:
-        _CS_ACCESS_DATA[engine] = {
+    if isinstance(engine_type, CsEngine) and engine_type != CsEngine.GCS and \
+       endpoint_url and bucket_name and access_key and secret_key and not \
+       (region_name and engine_type != CsEngine.AWS) and not \
+       (secure_access and engine_type != CsEngine.MINIO):
+        CS_ACCESS_DATA[engine] = {
             CsParam.ENGINE_ID: engine,
-            CsParam.ENGINE_TYPE: cs_type,
+            CsParam.ENGINE_TYPE: engine_type,
             CsParam.BUCKET_NAME: bucket_name,
             CsParam.ENDPOINT_URL: endpoint_url,
             CsParam.ACCESS_KEY: access_key,
             CsParam.SECRET_KEY: secret_key,
-            CsParam.VERSION: ""
+            CsParam.VERSION: "",
+            CsParam.LOGGER: logger
         }
-        if cs_type == CsEngine.AWS:
-            _CS_ACCESS_DATA[engine][CsParam.REGION_NAME]: region_name
-        elif cs_type == CsEngine.MINIO:
-            _CS_ACCESS_DATA[engine][CsParam.SECURE_ACCESS] = secure_access
-        _CS_LOGGERS[engine] = logger
+        if engine_type == CsEngine.AWS:
+            CS_ACCESS_DATA[engine][CsParam.REGION_NAME]: region_name
+        elif engine_type == CsEngine.MINIO:
+            CS_ACCESS_DATA[engine][CsParam.SECURE_ACCESS] = secure_access
         result = True
+    else:
+        err_msg = f"Cloud storage engine '{engine}' has missing or invalid setup data"
+        if logger:
+            logger.error(msg=err_msg)
+        if isinstance(errors, list):
+            errors.append(err_msg)
 
     return result
 
@@ -78,8 +87,7 @@ def cs_remove(*,
     # assert and remove the CS engine
     engine_id, _engine_type = _assert_engine(engine=engine)
     if engine_id:
-        _CS_ACCESS_DATA.pop(engine_id)
-        _CS_LOGGERS.pop(engine_id, None)
+        CS_ACCESS_DATA.pop(engine_id)
 
 
 def cs_set_logger(engine: CsEngine | str = None,
@@ -100,7 +108,7 @@ def cs_set_logger(engine: CsEngine | str = None,
     # assert the CS engine
     engine_id, _engine_type = _assert_engine(engine=engine)
     if engine_id:
-        _CS_LOGGERS[engine_id] = logger
+        CS_ACCESS_DATA[engine_id][CsParam.LOGGER] = logger
         result = True
 
     return result
@@ -116,7 +124,7 @@ def cs_get_engines() -> list[str]:
     :return: the *list* of configured *CS* engines
     """
     # SANITY-CHECK: return a cloned 'list'
-    return list(_CS_ACCESS_DATA)
+    return list(CS_ACCESS_DATA)
 
 
 def cs_get_param(key: CsParam,
@@ -146,12 +154,7 @@ def cs_get_param(key: CsParam,
 
 def cs_get_params(engine: CsEngine | str = None) -> dict[CsParam, Any] | None:
     """
-    Return the current access parameters as a *dict*.
-
-    The returned *dict* contains the keys *endpoint-url*, *bucket-name*,
-    *access-key*, *secret-key*, *region-name*, and *secure-access*.
-    The meaning of these parameters may vary between different *CS* engines.
-    Note that the keys in the returned *dict* are strings, not *CsParam* instances.
+    Return the current access parameters as a serializeable *dict*.
 
     :param engine: the database engine (the default engine, if not provided)
     :return: the current connection parameters for the engine, or *None* if not found
@@ -163,7 +166,9 @@ def cs_get_params(engine: CsEngine | str = None) -> dict[CsParam, Any] | None:
     engine_id, engine_type = _assert_engine(engine=engine)
     # retrieve the connection parameters
     if engine_id:
-        result = _CS_ACCESS_DATA[engine_id].copy()
+        result = CS_ACCESS_DATA[engine_id].copy()
+        result.pop(CsParam.CREDENTIALS, None)
+        result.pop(CsParam.LOGGER, None)
 
     return result
 
@@ -204,7 +209,7 @@ def cs_startup(engine: CsEngine | str = None,
                                             errors=errors)
     if engine_id:
         # determine whether 'engine_id' has been prepared for operations
-        version: str = _CS_ACCESS_DATA[engine_id].get(CsParam.VERSION)
+        version: str = CS_ACCESS_DATA[engine_id].get(CsParam.VERSION)
         if version:
             result = True
         else:
@@ -228,7 +233,7 @@ def cs_startup(engine: CsEngine | str = None,
                                                bucket=bucket,
                                                errors=errors)
             if result:
-                _CS_ACCESS_DATA[engine_id][CsParam.VERSION] = __get_version(engine=engine)
+                CS_ACCESS_DATA[engine_id][CsParam.VERSION] = __get_version(engine=engine)
 
     return result
 

@@ -13,8 +13,7 @@ from pypomes_core import Mimetype, file_get_data
 from typing import Any, BinaryIO
 
 from .cs_common import (
-    _CS_ACCESS_DATA, _CS_LOGGERS, CsEngine, CsParam,
-    _get_param, _except_msg
+    CS_ACCESS_DATA, CsEngine, CsParam, _get_param, _except_msg
 )
 
 
@@ -23,7 +22,8 @@ def gcs_setup(*,
               bucket_name: str = None,
               project_id: str = None,
               credentials: dict[str, str] | BytesIO | Path | str | bytes = None,
-              logger: Logger = None) -> bool:
+              logger: Logger = None,
+              errors: list[str] = None) -> bool:
     """
     Establish the parameters for access to *engine* of type *GCS*.
 
@@ -58,6 +58,7 @@ def gcs_setup(*,
     :param project_id: optional project identification
     :param credentials: optional access credentials
     :param logger: the logger for the GCS engine
+    :param errors: incidental error messages (may be a non-empty list)
     :return: *True* if the parameters were accepted, *False* otherwise
     """
     # initialize the return variable
@@ -66,25 +67,30 @@ def gcs_setup(*,
     if engine_id == CsEngine.GCS:
         engine_id = engine_id.value
 
-    if bucket_name and (project_id or credentials):
+    if not isinstance(engine_id, CsEngine) and \
+       bucket_name and (project_id or credentials):
         # initilize the GCS parameters
         if credentials:
             if not isinstance(credentials, dict):
                 credentials_bytes: bytes = file_get_data(credentials)
                 credentials = json.loads(s=credentials_bytes)
             project_id = credentials.get("project_id")
-        _CS_ACCESS_DATA[engine_id] = {
+        CS_ACCESS_DATA[engine_id] = {
             CsParam.ENGINE_ID: engine_id,
             CsParam.ENGINE_TYPE: CsEngine.GCS,
             CsParam.BUCKET_NAME: bucket_name,
             CsParam.CREDENTIALS: credentials,
             CsParam.PROJECT_ID: project_id,
-            CsParam.VERSION: ""
+            CsParam.VERSION: "",
+            CsParam.LOGGER: logger
         }
-        _CS_LOGGERS[engine_id] = logger
         result = True
-    elif logger:
-        logger.error(msg="'bucket_name' and either 'credentials' or 'project_id' must be provided")
+    else:
+        err_msg = f"Google Cloud Storage engine '{engine_id}' has missing or invalid setup data"
+        if logger:
+            logger.error(msg=err_msg)
+        if isinstance(errors, list):
+            errors.append(err_msg)
 
     return result
 
@@ -113,23 +119,27 @@ def startup(engine_id: str,
         try:
             client.get_bucket(bucket_or_name=bucket)
             result = True
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].debug(msg=f"Started GCS, bucket '{bucket}' asserted")
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.debug(msg=f"Started GCS, bucket '{bucket}' asserted")
         except Exception as e1:
             # log the exception and try to create a bucket
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].warning(msg=_except_msg(exception=e1,
-                                                               engine_id=engine_id))
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.warning(msg=_except_msg(exception=e1,
+                                               engine_id=engine_id))
             try:
                 client.create_bucket(bucket_or_name=bucket)
                 result = True
-                if _CS_LOGGERS.get(engine_id):
-                    _CS_LOGGERS[engine_id].debug(msg=f"Started GCS, bucket '{bucket}' created")
+                logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+                if logger:
+                    logger.debug(msg=f"Started GCS, bucket '{bucket}' created")
             except Exception as e2:
                 msg = _except_msg(exception=e2,
                                   engine_id=engine_id)
-                if _CS_LOGGERS.get(engine_id):
-                    _CS_LOGGERS[engine_id].error(msg=msg)
+                logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+                if logger:
+                    logger.error(msg=msg)
                 if isinstance(errors, list):
                     errors.append(msg)
     return result
@@ -160,14 +170,16 @@ def get_client(engine_id: str,
                             credentials=gcs_credentials)
         else:
             result = Client(project=project_id)
-        if _CS_LOGGERS.get(engine_id):
-            _CS_LOGGERS[engine_id].debug(msg="*GCS* client created")
+        logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+        if logger:
+            logger.debug(msg="*GCS* client created")
 
     except Exception as e:
         msg: str = _except_msg(exception=e,
                                engine_id=engine_id)
-        if _CS_LOGGERS.get(engine_id):
-            _CS_LOGGERS[engine_id].error(msg=msg)
+        logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+        if logger:
+            logger.error(msg=msg)
         if isinstance(errors, list):
             errors.append(msg)
 
@@ -216,14 +228,16 @@ def data_retrieve(engine_id: str,
             gcs_blob: Blob = gcs_bucket.blob(blob_name=obj_key)
             result = gcs_blob.download_as_bytes(start=from_byte,
                                                 end=to_byte)
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].debug(msg=f"Retrieved '{obj_key}', bucket '{bucket}'")
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.debug(msg=f"Retrieved '{obj_key}', bucket '{bucket}'")
         except Exception as e:
             if not isinstance(e, NotFound):
                 msg: str = _except_msg(exception=e,
                                        engine_id=engine_id)
-                if _CS_LOGGERS.get(engine_id):
-                    _CS_LOGGERS[engine_id].error(msg=msg)
+                logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+                if logger:
+                    logger.error(msg=msg)
                 if isinstance(errors, list):
                     errors.append(msg)
     return result
@@ -290,14 +304,16 @@ def data_store(engine_id: str,
             gcs_blob.upload_from_file(file_obj=bin_data,
                                       size=length,
                                       content_type=mimetype)
-            # if _CS_LOGGERS.get(engine_id):
-            #     _CS_LOGGERS[engine_id].debug(msg=(f"Stored '{obj_key}', bucket '{bucket}', "
-            #                                       f"content type '{mimetype}', tags '{tags}'"))
+            # logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            # if logger:
+            #     logger.debug(msg=(f"Stored '{obj_key}', bucket '{bucket}', "
+            #                       f"content type '{mimetype}', tags '{tags}'"))
         except Exception as e:
             msg: str = _except_msg(exception=e,
                                    engine_id=engine_id)
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].error(msg=msg)
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.error(msg=msg)
             if isinstance(errors, list):
                 errors.append(msg)
 
@@ -342,16 +358,18 @@ def file_retrieve(engine_id: str,
             gcs_blob: Blob = gcs_bucket.blob(blob_name=obj_key)
             gcs_blob.download_to_filename(filename=file_path)
             result = Path(filepath).exists()
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].debug(msg=f"{obj_key}', bucket '{bucket}', "
-                                                 f"{'retrieved' if result else 'not retrieved'}")
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.debug(msg=f"{obj_key}', bucket '{bucket}', "
+                                 f"{'retrieved' if result else 'not retrieved'}")
         except Exception as e:
             if not isinstance(e, NotFound):
                 result = None
                 msg: str = _except_msg(exception=e,
                                        engine_id=engine_id)
-                if _CS_LOGGERS.get(engine_id):
-                    _CS_LOGGERS[engine_id].error(msg=msg)
+                logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+                if logger:
+                    logger.error(msg=msg)
                 if isinstance(errors, list):
                     errors.append(msg)
     return result
@@ -407,16 +425,18 @@ def file_store(engine_id: str,
 
             gcs_blob.upload_from_filename(filename=file_path,
                                           content_type=mimetype)
-            # if _CS_LOGGERS.get(engine_id):
-            #     _C3_LOGGERS[engine_id].debug(msg=f"Stored '{obj_key}', "
-            #                                      f"bucket '{bucket}', from '{file_path}', "
-            #                                      f"content type '{mimetype}', tags '{tags}'")
+            # logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            # if logger:
+            #     logger.debug(msg=f"Stored '{obj_key}', "
+            #                      f"bucket '{bucket}', from '{file_path}', "
+            #                      f"content type '{mimetype}', tags '{tags}'")
             result = True
         except Exception as e:
             msg: str = _except_msg(exception=e,
                                    engine_id=engine_id)
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].error(msg=msg)
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.error(msg=msg)
             if isinstance(errors, list):
                 errors.append(msg)
     return result
@@ -499,14 +519,16 @@ def item_get_info(engine_id: str,
                 if f"metadata.{key}" in attributes:
                     result[key] = value
 
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].debug(msg=f"Got info for '{obj_key}', bucket '{bucket}'")
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.debug(msg=f"Got info for '{obj_key}', bucket '{bucket}'")
         except Exception as e:
             if not isinstance(e, NotFound):
                 msg: str = _except_msg(exception=e,
                                        engine_id=engine_id)
-                if _CS_LOGGERS.get(engine_id):
-                    _CS_LOGGERS[engine_id].error(msg=msg)
+                logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+                if logger:
+                    logger.error(msg=msg)
                 if isinstance(errors, list):
                     errors.append(msg)
     return result
@@ -554,14 +576,16 @@ def item_get_tags(engine_id: str,
             gcs_blob.reload()
             result = gcs_blob.metadata or {}
 
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].debug(msg=f"Got tags for '{obj_key}', bucket '{bucket}'")
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.debug(msg=f"Got tags for '{obj_key}', bucket '{bucket}'")
         except Exception as e:
             if not isinstance(e, NotFound):
                 msg: str = _except_msg(exception=e,
                                        engine_id=engine_id)
-                if _CS_LOGGERS.get(engine_id):
-                    _CS_LOGGERS[engine_id].error(msg=msg)
+                logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+                if logger:
+                    logger.error(msg=msg)
                 if isinstance(errors, list):
                     errors.append(msg)
     return result
@@ -615,15 +639,17 @@ def item_remove(engine_id: str,
                                              generation=version)
             gcs_blob.delete()
             result = True
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].debug(msg=f"Deleted '{obj_key}', bucket '{bucket}'")
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.debug(msg=f"Deleted '{obj_key}', bucket '{bucket}'")
         except Exception as e:
             if not isinstance(e, NotFound):
                 result = None
                 msg: str = _except_msg(exception=e,
                                        engine_id=engine_id)
-                if _CS_LOGGERS.get(engine_id):
-                    _CS_LOGGERS[engine_id].error(msg=msg)
+                logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+                if logger:
+                    logger.error(msg=msg)
                 if isinstance(errors, list):
                     errors.append(msg)
     return result
@@ -777,16 +803,18 @@ def items_get_info(engine_id: str,
 
             # save the items and log the results
             result = items
-            if _CS_LOGGERS.get(engine_id):
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
                 msg: str = f"Listed {len(result)} items in '{prefix}', bucket '{bucket}'"
                 if start_after:
                     msg += f", starting after {start_after}"
-                _CS_LOGGERS[engine_id].debug(msg=msg)
+                logger.debug(msg=msg)
         except Exception as e:
             msg: str = _except_msg(exception=e,
                                    engine_id=engine_id)
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].error(msg=msg)
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.error(msg=msg)
             if isinstance(errors, list):
                 errors.append(msg)
     return result
@@ -857,16 +885,18 @@ def items_get_names(engine_id: str,
 
             # save the items and log the results
             result = items
-            if _CS_LOGGERS.get(engine_id):
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
                 msg: str = f"Listed {len(result)} names in '{prefix}', bucket '{bucket}'"
                 if start_after:
                     msg += f", starting after {start_after}"
-                _CS_LOGGERS[engine_id].debug(msg=msg)
+                logger.debug(msg=msg)
         except Exception as e:
             msg: str = _except_msg(exception=e,
                                    engine_id=engine_id)
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].error(msg=msg)
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.error(msg=msg)
             if isinstance(errors, list):
                 errors.append(msg)
     return result
@@ -940,16 +970,18 @@ def items_get_tags(engine_id: str,
 
             # save the items and log the results
             result = items
-            if _CS_LOGGERS.get(engine_id):
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
                 msg: str = f"Listed {len(result)} items in '{prefix}', bucket '{bucket}'"
                 if start_after:
                     msg += f", starting after {start_after}"
-                _CS_LOGGERS[engine_id].debug(msg=msg)
+                logger.debug(msg=msg)
         except Exception as e:
             msg: str = _except_msg(exception=e,
                                    engine_id=engine_id)
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].error(msg=msg)
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.error(msg=msg)
             if isinstance(errors, list):
                 errors.append(msg)
     return result
@@ -1017,8 +1049,9 @@ def items_remove(engine_id: str,
             except Exception as e:
                 msg: str = _except_msg(exception=e,
                                        engine_id=engine_id)
-                if _CS_LOGGERS.get(engine_id):
-                    _CS_LOGGERS[engine_id].error(msg=msg)
+                logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+                if logger:
+                    logger.error(msg=msg)
                 if isinstance(errors, list):
                     errors.append(msg)
             pos += size
@@ -1068,14 +1101,16 @@ def generate_presigned_url(engine_id: str,
             expiration: timedelta = timedelta(seconds=expires_in)
             result = gcs_blob.generate_signed_url(expiration=expiration,
                                                   method="GET")
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].debug(msg=f"Generated presigned URL for '{obj_key}', bucket '{bucket}'")
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.debug(msg=f"Generated presigned URL for '{obj_key}', bucket '{bucket}'")
         except Exception as e:
             if not isinstance(e, NotFound):
                 msg: str = _except_msg(exception=e,
                                        engine_id=engine_id)
-                if _CS_LOGGERS.get(engine_id):
-                    _CS_LOGGERS[engine_id].error(msg=msg)
+                logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+                if logger:
+                    logger.error(msg=msg)
                 if isinstance(errors, list):
                     errors.append(msg)
     return result

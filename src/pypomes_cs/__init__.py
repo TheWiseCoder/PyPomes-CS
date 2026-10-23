@@ -1,7 +1,6 @@
 from .cs_common import (
     CsEngine, CsParam
 )
-from .gcs_pomes import gcs_setup
 from .cs_pomes import (
     cs_setup, cs_remove, cs_set_logger, cs_get_engines,
     cs_get_param, cs_get_params, cs_get_type,
@@ -14,10 +13,9 @@ from .cs_pomes import (
     cs_items_count, cs_items_get_info,
     cs_items_get_names, cs_items_remove, cs_generate_presigned_url
 )
+from .gcs_pomes import gcs_setup
 
 __all__ = [
-    # gcs_pomes
-    "gcs_setup",
     # cs_common
     "CsEngine", "CsParam",
     # cs_pomes
@@ -30,7 +28,9 @@ __all__ = [
     "cs_item_exists", "cs_item_get_info",
     "cs_item_get_tags", "cs_item_remove",
     "cs_items_count", "cs_items_get_info",
-    "cs_items_get_names", "cs_items_remove", "cs_generate_presigned_url"
+    "cs_items_get_names", "cs_items_remove", "cs_generate_presigned_url",
+    # gcs_pomes
+    "gcs_setup"
 ]
 
 from importlib.metadata import version

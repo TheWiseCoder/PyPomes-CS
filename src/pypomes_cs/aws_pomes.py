@@ -2,12 +2,13 @@ import boto3
 from botocore.client import BaseClient, Paginator
 from botocore.paginate import PageIterator
 from io import BytesIO
+from logging import Logger
 from pathlib import Path
 from pypomes_core import Mimetype
 from typing import Any, BinaryIO
 
 from .cs_common import (
-    _CS_LOGGERS, CsParam,
+    CS_ACCESS_DATA, CsParam,
     _get_param, _get_params, _normalize_tags, _except_msg
 )
 
@@ -36,14 +37,16 @@ def get_client(engine_id: str,
                               endpoint_url=aws_params.get(CsParam.ENDPOINT_URL),
                               aws_access_key_id=aws_params.get(CsParam.ACCESS_KEY),
                               aws_secret_access_key=aws_params.get(CsParam.SECRET_KEY))
-        if _CS_LOGGERS.get(engine_id):
-            _CS_LOGGERS[engine_id].debug(msg="AWS client created")
+        logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+        if logger:
+            logger.debug(msg="AWS client created")
 
     except Exception as e:
         msg: str = _except_msg(exception=e,
                                engine_id=engine_id)
-        if _CS_LOGGERS.get(engine_id):
-            _CS_LOGGERS[engine_id].error(msg=msg)
+        logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+        if logger:
+            logger.error(msg=msg)
         if isinstance(errors, list):
             errors.append(msg)
     return result
@@ -73,23 +76,25 @@ def startup(engine_id: str,
         try:
             client.head_bucket(Bucket=bucket)
             result = True
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].debug(msg=f"Started AWS, bucket '{bucket}' asserted")
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.debug(msg=f"Started AWS, bucket '{bucket}' asserted")
         except Exception as e1:
             # log the exception and try to create a bucket
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].warning(msg=_except_msg(exception=e1,
-                                                               engine_id=engine_id))
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.warning(msg=_except_msg(exception=e1,
+                                               engine_id=engine_id))
             try:
                 client.create_bucket(Bucket=bucket)
                 result = True
-                if _CS_LOGGERS.get(engine_id):
-                    _CS_LOGGERS[engine_id].debug(msg=f"Started AWS, bucket '{bucket}' created")
+                if logger:
+                    logger.debug(msg=f"Started AWS, bucket '{bucket}' created")
             except Exception as e2:
                 msg = _except_msg(exception=e2,
                                   engine_id=engine_id)
-                if _CS_LOGGERS.get(engine_id):
-                    _CS_LOGGERS[engine_id].error(msg=msg)
+                if logger:
+                    logger.error(msg=msg)
                 if isinstance(errors, list):
                     errors.append(msg)
     return result
@@ -136,16 +141,18 @@ def data_retrieve(engine_id: str,
                                                       Key=obj_key,
                                                       Range=obj_range)
             result = reply["Body"]
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].debug(msg=f"Retrieved '{obj_key}', bucket '{bucket}'")
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.debug(msg=f"Retrieved '{obj_key}', bucket '{bucket}'")
         except Exception as e:
             # noinspection PyUnresolvedReferences
             if (not (hasattr(e, "code") and e.code == "NoSuchKey")) and \
                (not hasattr(e, "response") and (e.response.get("Error") or {}).get("Code") == "404"):
                 msg: str = _except_msg(exception=e,
                                        engine_id=engine_id)
-                if _CS_LOGGERS.get(engine_id):
-                    _CS_LOGGERS[engine_id].error(msg=msg)
+                logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+                if logger:
+                    logger.error(msg=msg)
                 if isinstance(errors, list):
                     errors.append(msg)
     return result
@@ -221,14 +228,16 @@ def data_store(engine_id: str,
                                        ContentType=mimetype,
                                        Key=obj_key,
                                        Metadata=_normalize_tags(tags))
-            # if _CS_LOGGERS.get(engine_id):
-            #     _CS_LOGGERS[engine_id].debug(msg=(f"Stored '{obj_key}', bucket '{bucket}', "
-            #                                       f"content type '{mimetype}', tags '{tags}'"))
+            # logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            # if logger:
+            #     logger.debug(msg=f"Stored '{obj_key}', bucket '{bucket}', "
+            #                      f"content type '{mimetype}', tags '{tags}'")
         except Exception as e:
             msg: str = _except_msg(exception=e,
                                    engine_id=engine_id)
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].error(msg=msg)
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.error(msg=msg)
             if isinstance(errors, list):
                 errors.append(msg)
     return result
@@ -274,17 +283,19 @@ def file_retrieve(engine_id: str,
                                  Filename=file_path,
                                  Key=obj_key)
             result = Path(filepath).exists()
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].debug(msg=f"{obj_key}', bucket '{bucket}', "
-                                                 f"{'retrieved' if result else 'not retrieved'}")
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.debug(msg=f"{obj_key}', bucket '{bucket}', "
+                                 f"{'retrieved' if result else 'not retrieved'}")
         except Exception as e:
             # noinspection PyUnresolvedReferences
             if (not (hasattr(e, "code") and e.code == "NoSuchKey")) and \
                (not hasattr(e, "response") and (e.response.get("Error") or {}).get("Code") == "404"):
                 msg: str = _except_msg(exception=e,
                                        engine_id=engine_id)
-                if _CS_LOGGERS.get(engine_id):
-                    _CS_LOGGERS[engine_id].error(msg=msg)
+                logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+                if logger:
+                    logger.error(msg=msg)
                 if isinstance(errors, list):
                     errors.append(msg)
     return result
@@ -346,16 +357,18 @@ def file_store(engine_id: str,
                                Bucket=bucket,
                                Key=obj_key,
                                ExtraArgs=extra_args)
-            # if _CS_LOGGERS.get(engine_id):
-            #     _CS_LOGGERS[engine_id].debug(msg=f"Stored '{obj_key}', "
-            #                                      f"bucket '{bucket}', from '{file_path}', "
-            #                                      f"content type '{mimetype}', tags '{tags}'")
+            # logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            # if logger:
+            #     logger.debug(msg=f"Stored '{obj_key}', "
+            #                      f"bucket '{bucket}', from '{file_path}', "
+            #                      f"content type '{mimetype}', tags '{tags}'")
             result = True
         except Exception as e:
             msg: str = _except_msg(exception=e,
                                    engine_id=engine_id)
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].error(msg=msg)
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.error(msg=msg)
             if isinstance(errors, list):
                 errors.append(msg)
 
@@ -438,16 +451,18 @@ def item_get_info(engine_id: str,
             result = client.get_object_attributes(Bucket=bucket,
                                                   Key=obj_key,
                                                   ObjectAttributes=attributes)
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].debug(msg=f"Got info for '{obj_key}', bucket '{bucket}'")
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.debug(msg=f"Got info for '{obj_key}', bucket '{bucket}'")
         except Exception as e:
             # noinspection PyUnresolvedReferences
             if (not (hasattr(e, "code") and e.code == "NoSuchKey")) and \
                (not hasattr(e, "response") and (e.response.get("Error") or {}).get("Code") == "404"):
                 msg: str = _except_msg(exception=e,
                                        engine_id=engine_id)
-                if _CS_LOGGERS.get(engine_id):
-                    _CS_LOGGERS[engine_id].error(msg=msg)
+                logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+                if logger:
+                    logger.error(msg=msg)
                 if isinstance(errors, list):
                     errors.append(msg)
     return result
@@ -534,16 +549,18 @@ def item_get_tags(engine_id: str,
                                                            Key=obj_key)
             # make sure at least an empty dict is returned
             result = head_info.get("Metadata", {})
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].debug(msg=f"Retrieved '{obj_key}', bucket '{bucket}', tags '{result}'")
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.debug(msg=f"Retrieved '{obj_key}', bucket '{bucket}', tags '{result}'")
         except Exception as e:
             # noinspection PyUnresolvedReferences
             if (not (hasattr(e, "code") and e.code == "NoSuchKey")) and \
                (not hasattr(e, "response") and (e.response.get("Error") or {}).get("Code") == "404"):
                 msg: str = _except_msg(exception=e,
                                        engine_id=engine_id)
-                if _CS_LOGGERS.get(engine_id):
-                    _CS_LOGGERS[engine_id].error(msg=msg)
+                logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+                if logger:
+                    logger.error(msg=msg)
                 if isinstance(errors, list):
                     errors.append(msg)
     return result
@@ -596,8 +613,9 @@ def item_remove(engine_id: str,
             reply: dict[str, Any] = client.delete_object(Bucket=bucket,
                                                          Key=key,
                                                          VersionId=version)
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].debug(msg=f"Deleted '{key}', bucket '{bucket}'")
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.debug(msg=f"Deleted '{key}', bucket '{bucket}'")
             result = reply.get("DeleteMarker")
         except Exception as e:
             # noinspection PyUnresolvedReferences
@@ -605,8 +623,9 @@ def item_remove(engine_id: str,
                (not hasattr(e, "response") and (e.response.get("Error") or {}).get("Code") == "404"):
                 msg: str = _except_msg(exception=e,
                                        engine_id=engine_id)
-                if _CS_LOGGERS.get(engine_id):
-                    _CS_LOGGERS[engine_id].error(msg=msg)
+                logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+                if logger:
+                    logger.error(msg=msg)
                 if isinstance(errors, list):
                     errors.append(msg)
     return result
@@ -734,16 +753,18 @@ def items_get_info(engine_id: str,
             result = []
             for item in items:
                 result.append({k: v for k, v in item.items() if k in attrs})
-            if _CS_LOGGERS.get(engine_id):
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
                 msg: str = f"Listed {len(result)} items in '{prefix}', bucket '{bucket}'"
                 if start_after:
                     msg += f", starting after {start_after}"
-                _CS_LOGGERS[engine_id].debug(msg=msg)
+                logger.debug(msg=msg)
         except Exception as e:
             msg: str = _except_msg(exception=e,
                                    engine_id=engine_id)
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].error(msg=msg)
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.error(msg=msg)
             if isinstance(errors, list):
                 errors.append(msg)
     return result
@@ -786,13 +807,15 @@ def items_count(engine_id: str,
                                                         Delimiter="/")
             # traverse the pages, counting the items
             result = sum(page.get("KeyCount", 0) for page in iterator)
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].debug(msg=f"Counted {result} items in '{prefix}', bucket '{bucket}'")
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.debug(msg=f"Counted {result} items in '{prefix}', bucket '{bucket}'")
         except Exception as e:
             msg: str = _except_msg(exception=e,
                                    engine_id=engine_id)
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].error(msg=msg)
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.error(msg=msg)
             if isinstance(errors, list):
                 errors.append(msg)
 
@@ -875,16 +898,18 @@ def items_get_names(engine_id: str,
             result = []
             for item in items:
                 result.append(item.get("Key"))
-            if _CS_LOGGERS.get(engine_id):
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
                 msg: str = f"Listed {len(result)} names in '{prefix}', bucket '{bucket}'"
                 if start_after:
                     msg += f", starting after {start_after}"
-                _CS_LOGGERS[engine_id].debug(msg=msg)
+                logger.debug(msg=msg)
         except Exception as e:
             msg: str = _except_msg(exception=e,
                                    engine_id=engine_id)
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].error(msg=msg)
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.error(msg=msg)
             if isinstance(errors, list):
                 errors.append(msg)
     return result
@@ -960,8 +985,9 @@ def items_remove(engine_id: str,
                 except Exception as e:
                     msg: str = _except_msg(exception=e,
                                            engine_id=engine_id)
-                    if _CS_LOGGERS.get(engine_id):
-                        _CS_LOGGERS[engine_id].error(msg=msg)
+                    logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+                    if logger:
+                        logger.error(msg=msg)
                     if isinstance(errors, list):
                         errors.append(msg)
                 pos += size
@@ -1038,8 +1064,9 @@ def prefix_remove(engine_id: str,
                 except Exception as e:
                     msg: str = _except_msg(exception=e,
                                            engine_id=engine_id)
-                    if _CS_LOGGERS.get(engine_id):
-                        _CS_LOGGERS[engine_id].error(msg=msg)
+                    logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+                    if logger:
+                        logger.error(msg=msg)
                     if isinstance(errors, list):
                         errors.append(msg)
                 pos += size
@@ -1088,16 +1115,18 @@ def generate_presigned_url(engine_id: str,
                                                    Params={"Bucket": bucket,
                                                            "Key": obj_key},
                                                    ExpiresIn=expires_in)
-            if _CS_LOGGERS.get(engine_id):
-                _CS_LOGGERS[engine_id].debug(msg=f"Generated presigned URL for '{obj_key}', bucket '{bucket}'")
+            logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+            if logger:
+                logger.debug(msg=f"Generated presigned URL for '{obj_key}', bucket '{bucket}'")
         except Exception as e:
             # noinspection PyUnresolvedReferences
             if (not (hasattr(e, "code") and e.code == "NoSuchKey")) and \
                (not hasattr(e, "response") and (e.response.get("Error") or {}).get("Code") == "404"):
                 msg: str = _except_msg(exception=e,
                                        engine_id=engine_id)
-                if _CS_LOGGERS.get(engine_id):
-                    _CS_LOGGERS[engine_id].error(msg=msg)
+                logger: Logger = CS_ACCESS_DATA[engine_id].get(CsParam.LOGGER)
+                if logger:
+                    logger.error(msg=msg)
                 if isinstance(errors, list):
                     errors.append(msg)
     return result
