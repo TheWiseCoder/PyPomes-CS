@@ -228,10 +228,9 @@ def cs_startup(engine: CsEngine | str = None,
                                              errors=errors)
             elif engine_type == CsEngine.GCS:
                 from . import gcs_pomes
-                if gcs_pomes.gcs_setup(engine_id=engine_id):
-                    result = gcs_pomes.startup(engine_id=engine_id,
-                                               bucket=bucket,
-                                               errors=errors)
+                result = gcs_pomes.startup(engine_id=engine_id,
+                                           bucket=bucket,
+                                           errors=errors)
             if result:
                 CS_ACCESS_DATA[engine_id][CsParam.VERSION] = __get_version(engine=engine)
 

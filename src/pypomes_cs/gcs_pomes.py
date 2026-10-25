@@ -64,7 +64,8 @@ def gcs_setup(*,
     # initialize the return variable
     result: bool = False
 
-    if engine_id == CsEngine.GCS:
+    # HAZARD: 'isinstance()' verification necessary, as 'gcs' == CsEngine.GCS
+    if isinstance(engine_id, CsEngine) and engine_id == CsEngine.GCS:
         engine_id = engine_id.value
 
     if not isinstance(engine_id, CsEngine) and \

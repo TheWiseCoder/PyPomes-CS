@@ -75,7 +75,7 @@ def __get_access_data() -> dict[str, dict[CsParam, Any]]:
     prefixes: list[str] = []
     single_engine: str = env_get_str(key=f"{APP_PREFIX}_CS_ENGINE_ID")
     if single_engine:
-        prefixes.append("DB")
+        prefixes.append("CS")
     else:
         multi_engines: list[str] = env_get_strs(key=f"{APP_PREFIX}_CS_ENGINES")
         if multi_engines:
