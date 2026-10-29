@@ -7,6 +7,7 @@ from typing import Any, BinaryIO
 from .cs_common import (
     CS_ACCESS_DATA, CsEngine, CsParam, _assert_engine, _get_param, _except_msg
 )
+from .cs_init import cs_init_from_environment
 
 
 def cs_setup(*,
@@ -194,7 +195,7 @@ def cs_startup(engine: CsEngine | str = None,
 
     :param engine: the *CS* engine to use (uses the default engine, if not provided)
     :param bucket: the bucket to use (uses the default bucket, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: *True* if service is fully functional, *False* otherwise
     """
     # initialize the return variable
@@ -245,7 +246,7 @@ def cs_get_client(engine: CsEngine | str = None,
     The target *CS* engine, default or specified, must have been previously configured.
 
     :param engine: the *CS* engine to use (uses the default engine, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: the client to the *CS* engine, or *None* if the client cannot be obtained
     """
     # initialize the return variable
@@ -286,7 +287,7 @@ def cs_data_retrieve(identifier: str,
     :param bucket: the bucket to use (uses the default bucket, if not provided)
     :param engine: the *CS* engine to use (uses the default engine, if not provided)
     :param client: optional *CS* client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: the bytes retrieved, or *None* if error or data not found
     """
     # initialize the return variable
@@ -358,7 +359,7 @@ def cs_data_store(identifier: str,
     :param bucket: the bucket to use (uses the default bucket, if not provided)
     :param engine: the *CS* engine to use (uses the default engine, if not provided)
     :param client: optional *CS* client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: stored item's properties, or *None* if error
     """
     # initialize the return variable
@@ -422,7 +423,7 @@ def cs_file_retrieve(identifier: str,
     :param prefix: optional path prefixing the item to retrieve as a file
     :param engine: the *CS* engine to use (uses the default engine, if not provided)
     :param client: optional *CS* client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: *True* if the file was retrieved, *False* otherwise, or *None* if error
     """
     # initialize the return variable
@@ -481,7 +482,7 @@ def cs_file_store(identifier: str,
     :param prefix: optional destination path prefixing the item holding the file data
     :param engine: the *CS* engine to use (uses the default engine, if not provided)
     :param client: optional *CS* client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: *True* if the file was successfully stored, *False* if error
     """
     # initialize the return variable
@@ -540,7 +541,7 @@ def cs_object_retrieve(identifier: str,
     :param prefix: optional path prefixing the item to retrieve as object
     :param engine: the *CS* engine to use (uses the default engine, if not provided)
     :param client: optional *CS* client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: the object retrieved, or *None* if error or object not found
     """
     # initialize the return variable
@@ -587,7 +588,7 @@ def cs_object_store(identifier: str,
     :param bucket: the bucket to use (uses the default bucket, if not provided)
     :param prefix: optional destination path prefixing the item holding the object
     :param client: optional *CS* client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: the stored item's properties listed above, or *None* if error
     """
     # initialize the return variable
@@ -630,7 +631,7 @@ def cs_item_exists(identifier: str,
     :param bucket: the bucket to use (uses the default bucket, if not provided)
     :param engine: the *CS* engine to use (uses the default engine, if not provided)
     :param client: optional *CS* client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: *True* if the item was found, *False* otherwise, *None* if error
     """
     # initialize the return variable
@@ -673,7 +674,7 @@ def cs_item_get_info(identifier: str,
     :param bucket: the bucket to use (uses the default bucket, if not provided)
     :param engine: the *CS* engine to use (uses the default engine, if not provided)
     :param client: optional *CS* client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: information about the item, or *None* if error or item not found
     """
     # initialize the return variable
@@ -729,7 +730,7 @@ def cs_item_get_tags(identifier: str,
     :param bucket: the bucket to use (uses the default bucket, if not provided)
     :param engine: the CS engine to use (uses the default engine, if not provided)
     :param client: optional CS client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: the metadata tags associated with the item, or *None* if error or item not found
     """
     # initialize the return variable
@@ -783,7 +784,7 @@ def cs_item_remove(identifier: str,
     :param bucket: the bucket to use (uses the default bucket, if not provided)
     :param engine: the *CS* engine to use (uses the default engine, if not provided)
     :param client: optional *CS* client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: *True* if the item was successfully removed, *False* otherwise, *None* if error
     """
     # initialize the return variable
@@ -837,7 +838,7 @@ def cs_items_count(prefix: str | Path | None,
     :param bucket: the bucket to use (uses the default bucket, if not provided)
     :param engine: the *CS* engine to use (uses the default engine, if not provided)
     :param client: optional *CS* client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: the number of items in *prefix*, 0 if *prefix* not found, or *None* if error
     """
     # initialize the return variable
@@ -898,7 +899,7 @@ def cs_items_get_info(attrs: list[str],
     :param bucket: the bucket to use (uses the default bucket, if not provided)
     :param engine: the *CS* engine to use (uses the default engine, if not provided)
     :param client: optional *CS* client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: information on a list of items in *prefix*, or *None* if error or *prefix* not found
     """
     # initialize the return variable
@@ -961,7 +962,7 @@ def cs_items_get_names(prefix: str | Path,
     :param bucket: the bucket to use (uses the default bucket, if not provided)
     :param engine: the *CS* engine to use (uses the default engine, if not provided)
     :param client: optional *CS* client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: names of items in *prefix*, or *None* if error or *prefix* not found
     """
     # initialize the return variable
@@ -1022,7 +1023,7 @@ def cs_items_remove(identifiers: list[str | tuple[str, str]] = None,
     :param bucket: the bucket to use (uses the default bucket, if not provided)
     :param engine: the *CS* engine to use (uses the default engine, if not provided)
     :param client: optional *CS* client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: The number of items successfully removed
     """
     # initialize the return variable
@@ -1074,7 +1075,7 @@ def cs_generate_presigned_url(identifier: str,
     :param bucket: the bucket to use (uses the default bucket, if not provided)
     :param engine: the *CS* engine to use (uses the default engine, if not provided)
     :param client: optional *CS* client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: the URL generated, or *None* if error or data not found
     """
     # initialize the return variable
@@ -1137,3 +1138,7 @@ def __get_version(engine: CsEngine | str = None) -> str | None:
             result = google.cloud.storage.__version__
 
     return result
+
+
+# process access data in environment
+cs_init_from_environment()

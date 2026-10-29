@@ -29,7 +29,7 @@ def startup(engine_id: str,
 
     :param engine_id: the reference MinIO engine
     :param bucket: the bucket to use (uses the default bucket, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: *True* if service is fully functional, *False* otherwise
     """
     # initialize the return variable
@@ -67,7 +67,7 @@ def get_client(engine_id: str,
     Obtain and return a *MinIO* client object.
 
     :param engine_id: the reference MinIO engine
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: the MinIO client object, or *None* if error
     """
     # initialize the return variable
@@ -114,7 +114,7 @@ def data_retrieve(engine_id: str,
     :param prefix: optional path prefixing the item to be retrieved
     :param data_range: the begin-end positions within the data (in bytes, defaults to *None* - all bytes)
     :param client: optional MinIO client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: the bytes retrieved, or *None* if error or data not found
     """
     # initialize the return variable
@@ -189,7 +189,7 @@ def data_store(engine_id: str,
     :param tags: optional metadata tags describing the file
     :param bucket: the bucket to use (uses the default bucket, if not provided)
     :param client: optional MinIO client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: the stored item's properties listed above, or *None* if error
     """
     # initialize the return variable
@@ -258,7 +258,7 @@ def file_retrieve(engine_id: str,
     :param bucket: the bucket to use (uses the default bucket, if not provided)
     :param prefix: optional path prefixing the item to retrieve as a file
     :param client: optional MinIO client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: *True* if the file was retrieved, *False* otherwise, or *None* if error
     """
     # initialize the return variable
@@ -319,7 +319,7 @@ def file_store(engine_id: str,
     :param prefix: optional destination path prefixing the item holding the file data
     :param tags: optional metadata tags describing the file
     :param client: optional MinIO client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: *True* if the file was successfully stored, *False* if error
     """
     # initialize the return variable
@@ -389,7 +389,7 @@ def item_get_info(engine_id: str,
     :param bucket: the bucket to use (uses the default bucket, if not provided)
     :param prefix: optional path specifying where to locate the item
     :param client: optional MinIO client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: information about the item, an empty 'dict' if item not found, or *None* if error
     """
     # initialize the return variable
@@ -450,7 +450,7 @@ def item_get_tags(engine_id: str,
     :param prefix: optional path prefixing the item
     :param bucket: the bucket to use (uses the default bucket, if not provided)
     :param client: optional MinIO client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: the metadata tags, an empty 'dict' if item not found os has no tags, or *None* if error
     """
     # initialize the return variable
@@ -510,7 +510,7 @@ def item_remove(engine_id: str,
     :param version: optional version of the item to be removed (defaults to the its current version)
     :param bucket: the bucket to use (uses the default bucket, if not provided)
     :param client: optional MinIO client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: *True* if the item was successfully removed, *False* otherwise, *None* if error
     """
     # initialize the return variable
@@ -565,7 +565,7 @@ def items_count(engine_id: str,
     :param prefix: path prefixing the items to be counted
     :param bucket: the bucket to use (uses the default bucket, if not provided)
     :param client: optional MINIO client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: the number of items in *prefix*, 0 if *prefix* not found, or *None* if error
     """
     # initialize the return variable
@@ -646,7 +646,7 @@ def items_get_info(engine_id: str,
     :param start_after: optionally identifies the item after which to start the listing (defaults to first item)
     :param bucket: the bucket to use (uses the default bucket, if not provided)
     :param client: optional MinIO client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: the iterator into the list of items, or *None* if path not found or error
     """
     # initialize the return variable
@@ -721,7 +721,7 @@ def items_get_names(engine_id: str,
     :param start_after: optionally identifies the item after which to start the listing (defaults to first item)
     :param bucket: the bucket to use (uses the default bucket, if not provided)
     :param client: optional MinIO client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: the iterator into the list of items, or *None* if path not found or error
     """
     # initialize the return variable
@@ -799,7 +799,7 @@ def items_remove(engine_id: str,
     :param prefix: optional path prefixing the items to be removed
     :param bucket: the bucket to use (uses the default bucket, if not provided)
     :param client: optional MinIO client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: The number of items successfully removed
     """
     # initialize the return variable
@@ -875,7 +875,7 @@ def prefix_remove(engine_id: str,
     :param prefix: path prefixing the items to be removed
     :param bucket: the bucket to use (uses the default bucket, if not provided)
     :param client: optional MinIO client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: The number of items successfully removed
     """
     # initialize the return variable
@@ -946,7 +946,7 @@ def generate_presigned_url(engine_id: str,
     :param prefix: optional path prefixing the item to be retrieved
     :param bucket: the bucket to use (uses the default bucket, if not provided)
     :param client: optional MinIO client (obtains a new one, if not provided)
-    :param errors: incidental error messages (might be a non-empty list)
+    :param errors: incidental error messages (may be a non-empty list)
     :return: the URL generated, or *None* if error or data not found
     """
     # initialize the return variable
